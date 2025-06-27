@@ -17,37 +17,25 @@
 
 (defonce datasource (delay (jdbc/get-datasource @db-spec)))
 
-(defn execute-query!
-  "Executa uma query SQL. Retorna os resultados."
-  [query-vector]
+(defn execute-query! [query-vector]
   (jdbc/execute! @datasource query-vector {:builder-fn rs/as-unqualified-lower-maps}))
 
-(defn execute-one!
-  "Executa uma query SQL que deve retornar um único resultado ou um comando DML."
-  [query-vector]
+(defn execute-one! [query-vector]
   (jdbc/execute-one! @datasource query-vector {:builder-fn rs/as-unqualified-lower-maps}))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Middlewares de Segurança e Teste
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;; <<< CORREÇÃO >>>
-;; Middleware de simulação para testes. Ele injeta uma identidade de admin fixa na requisição.
-;; ANTES DE USAR: Insira os UUIDs de um admin e clínica de teste que você criou manualmente no banco.
-(defn wrap-mock-autenticacao
-  [handler]
+(defn wrap-mock-autenticacao [handler]
   (fn [request]
-    (let [;; SUBSTITUA OS VALORES ABAIXO PELOS UUIDs DO SEU BANCO
-          mock-user-id    "COLOQUE-O-UUID-DO-USUARIO-ADMIN-AQUI"
+    (let [mock-user-id    "COLOQUE-O-UUID-DO-USUARIO-ADMIN-AQUI"
           mock-clinica-id "COLOQUE-O-UUID-DA-CLINICA-AQUI"
           mock-papel-id   "COLOQUE-O-UUID-DO-PAPEL-ADMIN_CLINICA-AQUI"]
-
       (let [request-com-identidade (assoc request :identity {:id         (java.util.UUID/fromString mock-user-id)
                                                               :clinica-id (java.util.UUID/fromString mock-clinica-id)
                                                               :papel-id   (java.util.UUID/fromString mock-papel-id)})]
         (handler request-com-identidade)))))
-
 
 (defn wrap-checar-permissao [handler nome-permissao-requerida]
   (fn [request]
@@ -71,42 +59,37 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn health-check-handler [_]
-  {:status 200
-   :headers {"Content-Type" "text/plain"}
-   :body "Servidor Deep Saúde OK!"})
+  {:status 200 :headers {"Content-Type" "text/plain"} :body "Servidor Deep Saúde OK!"})
 
+;; <<< CORREÇÃO >>>
+;; Função reescrita com `cond` para evitar aninhamento excessivo e corrigir o erro de parênteses.
 (defn criar-psicologo-handler [request]
   (let [clinica-id (get-in request [:identity :clinica-id])
         {:keys [nome email]} (:body request)]
+    (cond
+      (or (nil? nome) (empty? nome) (nil? email) (empty? email))
+      {:status 400, :body {:erro "Nome e email são obrigatórios."}}
 
-    (if (or (nil? nome) (nil? email) (empty? nome) (empty? email))
-      {:status 400 :body {:erro "Nome e email são obrigatórios."}}
-      (let [email-existente (execute-one! ["SELECT id FROM usuarios WHERE email = ?" email])]
-        (if email-existente
-          {:status 409 :body {:erro "Email já cadastrado no sistema."}}
-          (let [clinica-info (execute-one! ["SELECT limite_psicologos FROM clinicas WHERE id = ?" clinica-id])
-                limite-psicologos (:limite_psicologos clinica-info)
-                papel-psicologo-info (execute-one! ["SELECT id FROM papeis WHERE nome_papel = 'psicologo'"])
-                papel-psicologo-id (:id papel-psicologo-info)]
+      (execute-one! ["SELECT id FROM usuarios WHERE email = ?" email])
+      {:status 409, :body {:erro "Email já cadastrado no sistema."}}
 
-            (if-not papel-psicologo-id
-              {:status 500 :body {:erro "Configuração de papel 'psicologo' não encontrada."}}
-              (let [psicologos-atuais (execute-one!
-                                       ["SELECT COUNT(*) AS count FROM usuarios WHERE clinica_id = ? AND papel_id = ?"
-                                        clinica-id papel-psicologo-id])
-                    contagem-psicologos (:count psicologos-atuais)]
+      :else
+      (let [clinica-info (execute-one! ["SELECT limite_psicologos FROM clinicas WHERE id = ?" clinica-id])
+            limite (:limite_psicologos clinica-info)
+            papel-id (:id (execute-one! ["SELECT id FROM papeis WHERE nome_papel = 'psicologo'"]))]
+        (if-not papel-id
+          {:status 500, :body {:erro "Configuração de papel 'psicologo' não encontrada."}}
+          (let [contagem (:count (execute-one! ["SELECT COUNT(*) AS count FROM usuarios WHERE clinica_id = ? AND papel_id = ?" clinica-id papel-id]))]
+            (if (and limite (>= contagem limite))
+              {:status 422, :body {:erro "Limite de psicólogos para esta clínica foi atingido."}}
+              (let [novo-usuario (sql/insert! @datasource :usuarios {:clinica_id clinica-id
+                                                                      :papel_id   papel-id
+                                                                      :nome       nome
+                                                                      :email      email}
+                                                {:builder-fn  rs/as-unqualified-lower-maps
+                                                 :return-keys [:id :nome :email :clinica_id :papel_id]})]
+                {:status 201, :body novo-usuario}))))))))
 
-                (if (and limite-psicologos (>= contagem-psicologos limite-psicologos))
-                  {:status 422 :body {:erro "Limite de psicólogos para esta clínica foi atingido."}}
-                  (let [novo-usuario (sql/insert! @datasource :usuarios {:clinica_id clinica-id
-                                                                          :papel_id   papel-psicologo-id
-                                                                          :nome       nome
-                                                                          :email      email}
-                                                    {:builder-fn  rs/as-unqualified-lower-maps
-                                                     :return-keys [:id :nome :email :clinica_id :papel_id]})]
-                    (if novo-usuario
-                      {:status 201 :body novo-usuario}
-                      {:status 500 :body {:erro "Falha ao criar psicólogo."}}))))))))))
 
 (defn listar-psicologos-handler [request]
   (let [clinica-id (get-in request [:identity :clinica-id])]
@@ -121,8 +104,6 @@
                              clinica-id papel-psicologo-id])]
             {:status 200 :body psicologos}))))))
 
-;; <<< CORREÇÃO >>>
-;; Função helper movida para ANTES de ser chamada.
 (defn- prosseguir-atualizacao [psicologo-id clinica-id updates]
   (let [update-result (sql/update! @datasource :usuarios updates {:id psicologo-id :clinica_id clinica-id})]
     (if (pos? (:next.jdbc/update-count update-result 0))
@@ -153,7 +134,7 @@
       {:status 400 :body {:erro "ID do psicólogo e ID da clínica são necessários."}}
       (let [delete-result (sql/delete! @datasource :usuarios {:id psicologo-id :clinica_id clinica-id})]
         (if (pos? (:next.jdbc/update-count delete-result 0))
-          {:status 204 :body nil} ; No Content
+          {:status 204 :body nil}
           {:status 404 :body {:erro "Psicólogo não encontrado nesta clínica."}})))))
 
 
@@ -161,14 +142,11 @@
 ;; Definição das Rotas e Aplicação Principal
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;; <<< CORREÇÃO >>>
-;; Aplicação do middleware movida para envolver a referência da função handler, e não o resultado.
 (defroutes psicologos-routes
   (POST   "/" request (wrap-checar-permissao criar-psicologo-handler "gerenciar_psicologos"))
   (GET    "/" request (wrap-checar-permissao listar-psicologos-handler "visualizar_todos_agendamentos"))
-  (PUT    "/:id" [id :as request] (wrap-checar-permissao (fn [req] (atualizar-psicologo-handler (assoc req :params {:id id}))) "gerenciar_psicologos"))
-  (DELETE "/:id" [id :as request] (wrap-checar-permissao (fn [req] (remover-psicologo-handler (assoc req :params {:id id}))) "gerenciar_psicologos")))
-
+  (PUT    "/:id" [id] (wrap-checar-permissao (fn [request] (atualizar-psicologo-handler (assoc request :params {:id id}))) "gerenciar_psicologos"))
+  (DELETE "/:id" [id] (wrap-checar-permissao (fn [request] (remover-psicologo-handler (assoc request :params {:id id}))) "gerenciar_psicologos")))
 
 (defroutes app-routes
   (GET "/api/health" [] health-check-handler)
@@ -177,11 +155,8 @@
 
 (def app
   (-> app-routes
-      ;; <<< CORREÇÃO >>>
-      ;; Adicionado o mock de autenticação para fins de teste.
-      ;; Este middleware DEVE ser o primeiro (ou um dos primeiros) a rodar.
       (wrap-mock-autenticacao)
-      (middleware-json/wrap-json-body {:keywords? true}) ; :keywords? true converte chaves JSON em keywords
+      (middleware-json/wrap-json-body {:keywords? true})
       (middleware-json/wrap-json-response)))
 
 
@@ -208,4 +183,4 @@
   (init-db)
   (let [port (Integer. (or (env :port) 3000))]
     (println (str "Servidor iniciado na porta " port))
-    (jetty/run-jetty #'app {:port port :join? false}))) ; Usamos #'app para referenciar a var
+    (jetty/run-jetty #'app {:port port :join? false})))
