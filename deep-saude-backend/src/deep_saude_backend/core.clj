@@ -1,7 +1,7 @@
 (ns deep-saude-backend.core
   (:require [ring.adapter.jetty :as jetty]
             [ring.middleware.json :as middleware-json]
-            [compojure.core :refer [defroutes GET POST PUT DELETE]]
+            [compojure.core :refer [defroutes GET POST PUT DELETE context]]
             [compojure.route :as route]
             [environ.core :refer [env]]
             [next.jdbc :as jdbc]
@@ -9,12 +9,12 @@
             [next.jdbc.result-set :as rs])
   (:gen-class))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Configuração do Banco de Dados
-(defonce db-spec (delay {:dbtype "postgresql" ; CockroachDB é compatível com PostgreSQL
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(defonce db-spec (delay {:dbtype "postgresql"
                          :jdbcUrl (env :database-url)}))
 
-;; DataSource para ser usado pelas funções next.jdbc
-;; Usamos um delay para que a DATABASE_URL seja lida apenas uma vez.
 (defonce datasource (delay (jdbc/get-datasource @db-spec)))
 
 (defn execute-query!
@@ -23,12 +23,32 @@
   (jdbc/execute! @datasource query-vector {:builder-fn rs/as-unqualified-lower-maps}))
 
 (defn execute-one!
-  "Executa uma query SQL que deve retornar um único resultado ou um comando DML.
-   Para SELECT, retorna o primeiro resultado. Para DML, retorna a contagem de linhas afetadas."
+  "Executa uma query SQL que deve retornar um único resultado ou um comando DML."
   [query-vector]
   (jdbc/execute-one! @datasource query-vector {:builder-fn rs/as-unqualified-lower-maps}))
 
-;; Middleware de Autorização RBAC
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Middlewares de Segurança e Teste
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; <<< CORREÇÃO >>>
+;; Middleware de simulação para testes. Ele injeta uma identidade de admin fixa na requisição.
+;; ANTES DE USAR: Insira os UUIDs de um admin e clínica de teste que você criou manualmente no banco.
+(defn wrap-mock-autenticacao
+  [handler]
+  (fn [request]
+    (let [;; SUBSTITUA OS VALORES ABAIXO PELOS UUIDs DO SEU BANCO
+          mock-user-id    "COLOQUE-O-UUID-DO-USUARIO-ADMIN-AQUI"
+          mock-clinica-id "COLOQUE-O-UUID-DA-CLINICA-AQUI"
+          mock-papel-id   "COLOQUE-O-UUID-DO-PAPEL-ADMIN_CLINICA-AQUI"]
+
+      (let [request-com-identidade (assoc request :identity {:id         (java.util.UUID/fromString mock-user-id)
+                                                              :clinica-id (java.util.UUID/fromString mock-clinica-id)
+                                                              :papel-id   (java.util.UUID/fromString mock-papel-id)})]
+        (handler request-com-identidade)))))
+
+
 (defn wrap-checar-permissao [handler nome-permissao-requerida]
   (fn [request]
     (let [identidade (:identity request)
@@ -46,14 +66,14 @@
             {:status 403 :body {:erro (str "Usuário não tem a permissão necessária: " nome-permissao-requerida)}}))))))
 
 
-(defn health-check-handler [request]
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Handlers (Lógica dos Endpoints)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn health-check-handler [_]
   {:status 200
    :headers {"Content-Type" "text/plain"}
    :body "Servidor Deep Saúde OK!"})
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Handlers dos Endpoints de Psicólogos
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn criar-psicologo-handler [request]
   (let [clinica-id (get-in request [:identity :clinica-id])
@@ -61,38 +81,32 @@
 
     (if (or (nil? nome) (nil? email) (empty? nome) (empty? email))
       {:status 400 :body {:erro "Nome e email são obrigatórios."}}
-      (do
-        ;; 1. Valide se o email já existe (globalmente)
-        (let [email-existente (execute-one! ["SELECT id FROM usuarios WHERE email = ?" email])]
-          (if email-existente
-            {:status 409 :body {:erro "Email já cadastrado no sistema."}}
-            (do
-              ;; 2. Verifique o limite_psicologos da clínica
-              (let [clinica-info (execute-one! ["SELECT limite_psicologos FROM clinicas WHERE id = ?" clinica-id])
-                    limite-psicologos (:limite_psicologos clinica-info)
-                    papel-psicologo-info (execute-one! ["SELECT id FROM papeis WHERE nome_papel = 'psicologo'"])
-                    papel-psicologo-id (:id papel-psicologo-info)]
+      (let [email-existente (execute-one! ["SELECT id FROM usuarios WHERE email = ?" email])]
+        (if email-existente
+          {:status 409 :body {:erro "Email já cadastrado no sistema."}}
+          (let [clinica-info (execute-one! ["SELECT limite_psicologos FROM clinicas WHERE id = ?" clinica-id])
+                limite-psicologos (:limite_psicologos clinica-info)
+                papel-psicologo-info (execute-one! ["SELECT id FROM papeis WHERE nome_papel = 'psicologo'"])
+                papel-psicologo-id (:id papel-psicologo-info)]
 
-                (if-not papel-psicologo-id
-                  {:status 500 :body {:erro "Configuração de papel 'psicologo' não encontrada."}}
-                  (let [psicologos-atuais (execute-one!
-                                           ["SELECT COUNT(*) AS count FROM usuarios WHERE clinica_id = ? AND papel_id = ?"
-                                            clinica-id papel-psicologo-id])
-                        contagem-psicologos (:count psicologos-atuais)]
+            (if-not papel-psicologo-id
+              {:status 500 :body {:erro "Configuração de papel 'psicologo' não encontrada."}}
+              (let [psicologos-atuais (execute-one!
+                                       ["SELECT COUNT(*) AS count FROM usuarios WHERE clinica_id = ? AND papel_id = ?"
+                                        clinica-id papel-psicologo-id])
+                    contagem-psicologos (:count psicologos-atuais)]
 
-                    (if (and limite-psicologos (>= contagem-psicologos limite-psicologos))
-                      {:status 422 :body {:erro "Limite de psicólogos para esta clínica foi atingido."}}
-                      (do
-                        ;; 4. Insira o novo usuário
-                        (let [novo-usuario (sql/insert! @datasource :usuarios {:clinica_id clinica-id
-                                                                                :papel_id papel-psicologo-id
-                                                                                :nome nome
-                                                                                :email email}
-                                                        {:builder-fn rs/as-unqualified-lower-maps
-                                                         :return-keys [:id :nome :email :clinica_id :papel_id]})] ; Especificar chaves de retorno
-                          (if novo-usuario
-                           {:status 201 :body novo-usuario}
-                           {:status 500 :body {:erro "Falha ao criar psicólogo."}})))))))))))))
+                (if (and limite-psicologos (>= contagem-psicologos limite-psicologos))
+                  {:status 422 :body {:erro "Limite de psicólogos para esta clínica foi atingido."}}
+                  (let [novo-usuario (sql/insert! @datasource :usuarios {:clinica_id clinica-id
+                                                                          :papel_id   papel-psicologo-id
+                                                                          :nome       nome
+                                                                          :email      email}
+                                                    {:builder-fn  rs/as-unqualified-lower-maps
+                                                     :return-keys [:id :nome :email :clinica_id :papel_id]})]
+                    (if novo-usuario
+                      {:status 201 :body novo-usuario}
+                      {:status 500 :body {:erro "Falha ao criar psicólogo."}}))))))))))
 
 (defn listar-psicologos-handler [request]
   (let [clinica-id (get-in request [:identity :clinica-id])]
@@ -107,11 +121,21 @@
                              clinica-id papel-psicologo-id])]
             {:status 200 :body psicologos}))))))
 
+;; <<< CORREÇÃO >>>
+;; Função helper movida para ANTES de ser chamada.
+(defn- prosseguir-atualizacao [psicologo-id clinica-id updates]
+  (let [update-result (sql/update! @datasource :usuarios updates {:id psicologo-id :clinica_id clinica-id})]
+    (if (pos? (:next.jdbc/update-count update-result 0))
+      (let [usuario-atualizado (execute-one!
+                                ["SELECT id, nome, email, clinica_id, papel_id FROM usuarios WHERE id = ? AND clinica_id = ?"
+                                 psicologo-id clinica-id])]
+        {:status 200 :body usuario-atualizado})
+      {:status 404 :body {:erro "Psicólogo não encontrado nesta clínica ou nenhum dado alterado."}})))
+
 (defn atualizar-psicologo-handler [request]
   (let [psicologo-id (get-in request [:params :id])
         clinica-id (get-in request [:identity :clinica-id])
         updates (select-keys (:body request) [:nome :email])]
-
     (if (empty? updates)
       {:status 400 :body {:erro "Nenhum dado fornecido para atualização. Forneça 'nome' e/ou 'email'."}}
       (if-let [novo-email (:email updates)]
@@ -121,15 +145,6 @@
             {:status 409 :body {:erro "O email fornecido já está em uso por outro usuário."}}
             (prosseguir-atualizacao psicologo-id clinica-id updates)))
         (prosseguir-atualizacao psicologo-id clinica-id updates)))))
-
-(defn- prosseguir-atualizacao [psicologo-id clinica-id updates]
-  (let [update-result (sql/update! @datasource :usuarios updates {:id psicologo-id :clinica_id clinica-id})]
-    (if (pos? (:next.jdbc/update-count update-result 0)) ; Verifica se alguma linha foi afetada
-      (let [usuario-atualizado (execute-one!
-                                ["SELECT id, nome, email, clinica_id, papel_id FROM usuarios WHERE id = ? AND clinica_id = ?"
-                                 psicologo-id clinica-id])]
-        {:status 200 :body usuario-atualizado})
-      {:status 404 :body {:erro "Psicólogo não encontrado nesta clínica ou nenhum dado alterado."}})))
 
 (defn remover-psicologo-handler [request]
   (let [psicologo-id (get-in request [:params :id])
@@ -142,32 +157,44 @@
           {:status 404 :body {:erro "Psicólogo não encontrado nesta clínica."}})))))
 
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Definição das Rotas e Aplicação Principal
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; <<< CORREÇÃO >>>
+;; Aplicação do middleware movida para envolver a referência da função handler, e não o resultado.
 (defroutes psicologos-routes
-  (POST "/" request (wrap-checar-permissao (criar-psicologo-handler request) "gerenciar_psicologos"))
-  (GET  "/" request (wrap-checar-permissao (listar-psicologos-handler request) "visualizar_todos_agendamentos"))
-  (PUT "/:id" [id :as request] (wrap-checar-permissao (atualizar-psicologo-handler (assoc request :params {:id id})) "gerenciar_psicologos"))
-  (DELETE "/:id" [id :as request] (wrap-checar-permissao (remover-psicologo-handler (assoc request :params {:id id})) "gerenciar_psicologos")))
+  (POST   "/" request (wrap-checar-permissao criar-psicologo-handler "gerenciar_psicologos"))
+  (GET    "/" request (wrap-checar-permissao listar-psicologos-handler "visualizar_todos_agendamentos"))
+  (PUT    "/:id" [id :as request] (wrap-checar-permissao (fn [req] (atualizar-psicologo-handler (assoc req :params {:id id}))) "gerenciar_psicologos"))
+  (DELETE "/:id" [id :as request] (wrap-checar-permissao (fn [req] (remover-psicologo-handler (assoc req :params {:id id}))) "gerenciar_psicologos")))
+
 
 (defroutes app-routes
   (GET "/api/health" [] health-check-handler)
-  (compojure.core/context "/api/psicologos" [] psicologos-routes) ; Middleware aplicado individualmente agora
+  (context "/api/psicologos" [] psicologos-routes)
   (route/not-found "Recurso não encontrado"))
 
-; Aplica middleware para parsear JSON no corpo das requisições POST/PUT
-; e para converter respostas em JSON.
 (def app
   (-> app-routes
-      middleware-json/wrap-json-body
-      middleware-json/wrap-json-response))
+      ;; <<< CORREÇÃO >>>
+      ;; Adicionado o mock de autenticação para fins de teste.
+      ;; Este middleware DEVE ser o primeiro (ou um dos primeiros) a rodar.
+      (wrap-mock-autenticacao)
+      (middleware-json/wrap-json-body {:keywords? true}) ; :keywords? true converte chaves JSON em keywords
+      (middleware-json/wrap-json-response)))
 
-; Funções para init e destroy (opcionais para o plugin lein-ring, mas bom ter)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Funções de Inicialização
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 (defn init-db []
   (if (env :database-url)
     (do
-      (println "DATABASE_URL encontrada:" (env :database-url))
-      (println "Tentando conectar ao banco de dados para verificar a configuração...")
+      (println "DATABASE_URL encontrada.")
+      (println "Tentando conectar ao banco de dados...")
       (try
-        ; Tenta uma query simples para verificar a conexão
         (execute-query! ["SELECT 1"])
         (println "Conexão com o banco de dados estabelecida com sucesso!")
         (catch Exception e
@@ -175,20 +202,10 @@
     (println "AVISO: DATABASE_URL não configurada. As operações de banco de dados irão falhar.")))
 
 (defn destroy-db []
-  (println "Limpando conexões DB (se necessário)...")
-  ; next.jdbc gerencia pools de conexão automaticamente se você usar um DataSource com pooling.
-  ; Se @datasource for um HikariDataSource, por exemplo, você poderia fechá-lo aqui.
-  ; Por enquanto, como é um get-datasource simples, não há muito a fazer explicitamente.
-  )
+  (println "Finalizando aplicação..."))
 
-
-(defn -main [& args]
-  (init-db) ; Chama a inicialização do DB
+(defn -main [& _]
+  (init-db)
   (let [port (Integer. (or (env :port) 3000))]
     (println (str "Servidor iniciado na porta " port))
-    (jetty/run-jetty app {:port port :join? false})))
-
-; Para `lein ring server` ou similar, ele espera uma var chamada `app`
-; A função -main é para `lein run` ou quando compilado para uberjar.
-; O plugin lein-ring usará a var `app` definida acima.
-; O :init do project.clj também chamará init-db.
+    (jetty/run-jetty #'app {:port port :join? false}))) ; Usamos #'app para referenciar a var
