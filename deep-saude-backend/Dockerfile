@@ -1,6 +1,7 @@
 # --- Estágio 1: Build ---
-# Usamos uma imagem específica e estável do Clojure com Leiningen para construir o projeto.
-FROM clojure:temurin-17-lein-2.11.2-buster AS builder
+# <<< CORREÇÃO FINAL >>>
+# Usando a imagem oficial do Leiningen com uma versão específica, como você sugeriu.
+FROM leiningen:2.11.2 AS builder
 
 WORKDIR /app
 
@@ -22,6 +23,7 @@ FROM eclipse-temurin:17-jre-focal
 WORKDIR /app
 
 # Copia apenas o arquivo .jar compilado do estágio de build.
+# O nome do arquivo pode variar. Verifique o nome gerado na pasta 'target/uberjar'.
 COPY --from=builder /app/target/uberjar/deep-saude-backend-0.1.0-SNAPSHOT-standalone.jar ./app.jar
 
 # Expõe a porta que a aplicação vai usar.
