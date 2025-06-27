@@ -12,8 +12,19 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Configuração do Banco de Dados
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(defonce db-spec (delay {:dbtype "postgresql"
-                         :jdbcUrl (env :database-url)}))
+
+;; <<< CORREÇÃO APLICADA AQUI >>>
+;; Adicionada lógica para prefixar a DATABASE_URL com "jdbc:"
+(defonce db-spec
+  (delay
+    (let [db-url (env :database-url)]
+      (when db-url ; Só cria a configuração se a URL existir
+        {:dbtype "postgresql"
+         ;; O driver JDBC espera "jdbc:postgresql://..." em vez de "postgresql://..."
+         ;; Adicionamos o "jdbc:" que está faltando na URL do CockroachDB.
+         :jdbcUrl (if (.startsWith db-url "postgresql://")
+                    (str "jdbc:" db-url)
+                    db-url)}))))
 
 (defonce datasource (delay (jdbc/get-datasource @db-spec)))
 
@@ -61,8 +72,6 @@
 (defn health-check-handler [_]
   {:status 200 :headers {"Content-Type" "text/plain"} :body "Servidor Deep Saúde OK!"})
 
-;; <<< CORREÇÃO >>>
-;; Função reescrita com `cond` para evitar aninhamento excessivo e corrigir o erro de parênteses.
 (defn criar-psicologo-handler [request]
   (let [clinica-id (get-in request [:identity :clinica-id])
         {:keys [nome email]} (:body request)]
@@ -86,8 +95,8 @@
                                                                       :papel_id   papel-id
                                                                       :nome       nome
                                                                       :email      email}
-                                                {:builder-fn  rs/as-unqualified-lower-maps
-                                                 :return-keys [:id :nome :email :clinica_id :papel_id]})]
+                                                    {:builder-fn  rs/as-unqualified-lower-maps
+                                                     :return-keys [:id :nome :email :clinica_id :papel_id]})]
                 {:status 201, :body novo-usuario}))))))))
 
 
