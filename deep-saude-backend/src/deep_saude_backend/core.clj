@@ -29,9 +29,9 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (defn wrap-mock-autenticacao [handler]
   (fn [request]
-    (let [mock-user-id    "COLOQUE-O-UUID-DO-USUARIO-ADMIN-AQUI"
-          mock-clinica-id "COLOQUE-O-UUID-DA-CLINICA-AQUI"
-          mock-papel-id   "COLOQUE-O-UUID-DO-PAPEL-ADMIN_CLINICA-AQUI"]
+    (let [mock-user-id    "4b667789-dd9e-4c54-a101-3334e450433f"
+          mock-clinica-id "f53fe6b6-80f5-4877-8684-90bfd1ef5a6c"
+          mock-papel-id   "80ecd123-0abc-47ef-b6b0-c3a419d3922a"]
       (let [request-com-identidade (assoc request :identity {:id         (java.util.UUID/fromString mock-user-id)
                                                               :clinica-id (java.util.UUID/fromString mock-clinica-id)
                                                               :papel-id   (java.util.UUID/fromString mock-papel-id)})]
