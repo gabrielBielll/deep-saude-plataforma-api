@@ -6,25 +6,22 @@
             [environ.core :refer [env]]
             [next.jdbc :as jdbc]
             [next.jdbc.sql :as sql]
-            [next.jdbc.result-set :as rs])
+            [next.jdbc.result-set :as rs]
+            [clojure.string :as str]) ; <<< ALTERAÇÃO AQUI: Adicionado para usar str/replace-first
   (:gen-class))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Configuração do Banco de Dados
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;; <<< CORREÇÃO APLICADA AQUI >>>
-;; Adicionada lógica para prefixar a DATABASE_URL com "jdbc:"
+;; <<< ALTERAÇÃO AQUI: Nova configuração do db-spec para lidar com SSL programaticamente
 (defonce db-spec
   (delay
-    (let [db-url (env :database-url)]
-      (when db-url ; Só cria a configuração se a URL existir
-        {:dbtype "postgresql"
-         ;; O driver JDBC espera "jdbc:postgresql://..." em vez de "postgresql://..."
-         ;; Adicionamos o "jdbc:" que está faltando na URL do CockroachDB.
-         :jdbcUrl (if (.startsWith db-url "postgresql://")
-                    (str "jdbc:" db-url)
-                    db-url)}))))
+    (when-let [db-url (env :database-url)]
+      {:dbtype   "postgresql"
+       :jdbcUrl  (str/replace-first db-url "postgresql://" "jdbc:postgresql://")
+       :ssl      true
+       :sslmode  "require"})))
 
 (defonce datasource (delay (jdbc/get-datasource @db-spec)))
 
