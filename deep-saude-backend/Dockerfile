@@ -1,33 +1,22 @@
-# --- Estágio 1: Build ---
-# <<< CORREÇÃO FINAL >>>
-# Usando a imagem oficial do Leiningen com uma versão específica, como você sugeriu.
-FROM leiningen:2.11.2 AS builder
+# Usa a imagem base do seu outro projeto, que sabemos que funciona no Render.
+FROM clojure:lein-2.11.2
 
+# Define o diretório de trabalho dentro do container
 WORKDIR /app
 
-# Copia apenas o project.clj primeiro para aproveitar o cache do Docker.
+# Copia o arquivo de projeto primeiro para aproveitar o cache do Docker
 COPY project.clj .
+
+# Baixa as dependências
 RUN lein deps
 
-# Copia todo o resto do código fonte.
+# Copia o restante do código da aplicação
 COPY . .
 
-# Comando para empacotar a aplicação em um único arquivo .jar (uberjar)
-RUN lein uberjar
-
-
-# --- Estágio 2: Produção ---
-# Usamos uma imagem leve, apenas com o Java Runtime Environment, para rodar a aplicação.
-FROM eclipse-temurin:17-jre-focal
-
-WORKDIR /app
-
-# Copia apenas o arquivo .jar compilado do estágio de build.
-# O nome do arquivo pode variar. Verifique o nome gerado na pasta 'target/uberjar'.
-COPY --from=builder /app/target/uberjar/deep-saude-backend-0.1.0-SNAPSHOT-standalone.jar ./app.jar
-
-# Expõe a porta que a aplicação vai usar.
+# Expõe a porta que o servidor irá rodar.
+# Nossa aplicação está configurada para usar a variável de ambiente PORT ou 3000 como padrão.
 EXPOSE 3000
 
-# O comando final para rodar a aplicação a partir do uberjar.
-CMD ["java", "-jar", "./app.jar"]
+# Comando para iniciar o servidor.
+# O `lein-ring` é inteligente e usará automaticamente a variável de ambiente $PORT fornecida pelo Render.
+CMD ["lein", "ring", "server-headless"]
