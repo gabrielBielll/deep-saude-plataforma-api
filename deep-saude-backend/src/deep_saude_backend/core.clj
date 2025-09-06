@@ -157,7 +157,7 @@
                              clinica-id papel-psicologo-id])]
             {:status 200 :body psicologos}))))))
 
-;; --- Handlers de Pacientes (NOVA SEÇÃO) ---
+;; --- Handlers de Pacientes ---
 (defn criar-paciente-handler [request]
   (let [clinica-id (get-in request [:identity :clinica_id])
         {:keys [nome email telefone]} (:body request)]
@@ -182,6 +182,41 @@
     (let [pacientes (execute-query! ["SELECT * FROM pacientes WHERE clinica_id = ?" clinica-id])]
       {:status 200 :body pacientes})))
 
+;; --- Handlers de Agendamentos (NOVA SEÇÃO) ---
+(defn criar-agendamento-handler [request]
+  (let [clinica-id (get-in request [:identity :clinica_id])
+        {:keys [paciente_id psicologo_id data_hora_inicio data_hora_fim valor_consulta]} (:body request)]
+    ;; Validação de dados de entrada
+    (if (or (nil? paciente_id) (nil? psicologo_id) (nil? data_hora_inicio) (nil? data_hora_fim))
+      {:status 400, :body {:erro "paciente_id, psicologo_id, data_hora_inicio e data_hora_fim são obrigatórios."}}
+      ;; Validação de consistência (Multi-Tenancy)
+      (let [paciente-valido? (execute-one! ["SELECT id FROM pacientes WHERE id = ? AND clinica_id = ?" paciente_id clinica-id])
+            psicologo-valido? (execute-one! ["SELECT id FROM usuarios WHERE id = ? AND clinica_id = ?" psicologo_id clinica-id])]
+        (if (and paciente-valido? psicologo-valido?)
+          (let [novo-agendamento (sql/insert! @datasource :agendamentos
+                                              {:clinica_id       clinica-id
+                                               :paciente_id      paciente_id
+                                               :psicologo_id     psicologo_id
+                                               :data_hora_inicio data_hora_inicio
+                                               :data_hora_fim    data_hora_fim
+                                               :valor_consulta   valor_consulta}
+                                              {:builder-fn rs/as-unqualified-lower-maps :return-keys true})]
+            {:status 201, :body novo-agendamento})
+          {:status 422, :body {:erro "Paciente ou psicólogo não pertence à clínica do usuário autenticado."}})))))
+
+(defn listar-agendamentos-handler [request]
+  (let [identity (:identity request)
+        clinica-id (:clinica_id identity)
+        papel-id (:papel_id identity)
+        user-id (:user_id identity)
+        nome-papel (:nome_papel (execute-one! ["SELECT nome_papel FROM papeis WHERE id = ?" papel-id]))]
+    (let [agendamentos (if (or (= nome-papel "admin_clinica") (= nome-papel "secretario"))
+                         ;; Admins e Secretários veem tudo da clínica
+                         (execute-query! ["SELECT * FROM agendamentos WHERE clinica_id = ?" clinica-id])
+                         ;; Psicólogos veem apenas os seus
+                         (execute-query! ["SELECT * FROM agendamentos WHERE clinica_id = ? AND psicologo_id = ?" clinica-id user-id]))]
+      {:status 200 :body agendamentos})))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Definição das Rotas e Aplicação Principal
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -191,17 +226,22 @@
   (POST "/api/auth/login" [] login-handler)
   (GET  "/api/health" [] health-check-handler))
 
-;; --- Rotas de Pacientes (NOVA SEÇÃO) ---
 (defroutes pacientes-routes
   (POST "/" request (wrap-checar-permissao criar-paciente-handler "gerenciar_pacientes"))
   (GET  "/" request (wrap-checar-permissao listar-pacientes-handler "visualizar_pacientes")))
+
+;; --- Rotas de Agendamentos (NOVA SEÇÃO) ---
+(defroutes agendamentos-routes
+  (POST "/" request (wrap-checar-permissao criar-agendamento-handler "gerenciar_agendamentos_clinica"))
+  (GET  "/" request (wrap-jwt-autenticacao listar-agendamentos-handler))) ; Permissão é checada dentro do handler
 
 (defroutes protected-routes
   (POST   "/api/usuarios" request (wrap-checar-permissao criar-usuario-handler "gerenciar_usuarios"))
   (context "/api/psicologos" []
     (GET    "/" request (wrap-checar-permissao listar-psicologos-handler "visualizar_todos_agendamentos")))
-  ;; --- Adicionando as rotas de pacientes às rotas protegidas ---
-  (context "/api/pacientes" [] pacientes-routes))
+  (context "/api/pacientes" [] pacientes-routes)
+  ;; --- Adicionando as rotas de agendamentos ---
+  (context "/api/agendamentos" [] agendamentos-routes))
 
 (def app
   (-> (defroutes app-routes
