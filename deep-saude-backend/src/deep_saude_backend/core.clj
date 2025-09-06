@@ -8,7 +8,6 @@
             [next.jdbc.sql :as sql]
             [next.jdbc.result-set :as rs]
             [clojure.string :as str]
-            ;; --- DEPENDÊNCIAS PARA AUTENTICAÇÃO ---
             [buddy.sign.jwt :as jwt]
             [buddy.hashers :as hashers])
   (:gen-class))
@@ -73,9 +72,13 @@
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Handlers de Autenticação e Provisionamento
+;; Handlers (Lógica dos Endpoints)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(defn health-check-handler [_]
+  {:status 200 :headers {"Content-Type" "text/plain"} :body "Servidor Deep Saúde OK!"})
+
+;; --- Handlers de Autenticação e Provisionamento ---
 (defn provisionar-clinica-handler [request]
   (let [{:keys [nome_clinica limite_psicologos nome_admin email_admin senha_admin]} (:body request)]
     (cond
@@ -89,11 +92,7 @@
       (let [nova-clinica (sql/insert! @datasource :clinicas
                                       {:nome_da_clinica nome_clinica :limite_psicologos limite_psicologos}
                                       {:builder-fn rs/as-unqualified-lower-maps :return-keys [:id :nome_da_clinica]})
-            
-            ;; --- CORREÇÃO FINALÍSSIMA AQUI ---
-            ;; Alterado de 'admin' para 'admin_clinica' para corresponder ao banco de dados.
             papel-admin-id (:id (execute-one! ["SELECT id FROM papeis WHERE nome_papel = 'admin_clinica'"]))
-
             novo-admin (when papel-admin-id
                          (sql/insert! @datasource :usuarios
                                       {:clinica_id (:id nova-clinica)
@@ -103,9 +102,9 @@
                                        :senha_hash (hashers/encrypt senha_admin)}
                                       {:builder-fn rs/as-unqualified-lower-maps :return-keys [:id :email]}))]
         (if novo-admin
-          {:status 201 :body {:message         "Clínica e usuário administrador criados com sucesso."
-                               :clinica         nova-clinica
-                               :usuario_admin   novo-admin}}
+          {:status 201 :body {:message "Clínica e usuário administrador criados com sucesso."
+                               :clinica nova-clinica
+                               :usuario_admin novo-admin}}
           {:status 500 :body {:erro "Erro interno: O papel 'admin_clinica' não foi encontrado ou não pôde ser associado."}})))))
 
 (defn login-handler [request]
@@ -122,14 +121,7 @@
         {:status 401 :body {:erro "Credenciais inválidas."}})
       {:status 401 :body {:erro "Credenciais inválidas."}})))
 
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Handlers (Lógica dos Endpoints)
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(defn health-check-handler [_]
-  {:status 200 :headers {"Content-Type" "text/plain"} :body "Servidor Deep Saúde OK!"})
-
+;; --- Handlers de Usuários ---
 (defn criar-usuario-handler [request]
   (let [clinica-id-admin (get-in request [:identity :clinica_id])
         {:keys [nome email senha papel]} (:body request)]
@@ -152,6 +144,7 @@
           {:status 201, :body novo-usuario})
         {:status 400, :body {:erro (str "O papel '" papel "' não é válido.")}}))))
 
+;; --- Handlers de Psicólogos ---
 (defn listar-psicologos-handler [request]
   (let [clinica-id (get-in request [:identity :clinica_id])]
     (if-not clinica-id
@@ -164,6 +157,31 @@
                              clinica-id papel-psicologo-id])]
             {:status 200 :body psicologos}))))))
 
+;; --- Handlers de Pacientes (NOVA SEÇÃO) ---
+(defn criar-paciente-handler [request]
+  (let [clinica-id (get-in request [:identity :clinica_id])
+        {:keys [nome email telefone]} (:body request)]
+    (cond
+      (str/blank? nome)
+      {:status 400, :body {:erro "Nome do paciente é obrigatório."}}
+
+      (and email (not (str/blank? email)) (execute-one! ["SELECT id FROM pacientes WHERE email = ? AND clinica_id = ?" email clinica-id]))
+      {:status 409, :body {:erro "Email do paciente já cadastrado nesta clínica."}}
+
+      :else
+      (let [novo-paciente (sql/insert! @datasource :pacientes
+                                       {:clinica_id clinica-id
+                                        :nome       nome
+                                        :email      email
+                                        :telefone   telefone}
+                                       {:builder-fn rs/as-unqualified-lower-maps :return-keys true})]
+        {:status 201, :body novo-paciente}))))
+
+(defn listar-pacientes-handler [request]
+  (let [clinica-id (get-in request [:identity :clinica_id])]
+    (let [pacientes (execute-query! ["SELECT * FROM pacientes WHERE clinica_id = ?" clinica-id])]
+      {:status 200 :body pacientes})))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Definição das Rotas e Aplicação Principal
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -173,10 +191,17 @@
   (POST "/api/auth/login" [] login-handler)
   (GET  "/api/health" [] health-check-handler))
 
+;; --- Rotas de Pacientes (NOVA SEÇÃO) ---
+(defroutes pacientes-routes
+  (POST "/" request (wrap-checar-permissao criar-paciente-handler "gerenciar_pacientes"))
+  (GET  "/" request (wrap-checar-permissao listar-pacientes-handler "visualizar_pacientes")))
+
 (defroutes protected-routes
   (POST   "/api/usuarios" request (wrap-checar-permissao criar-usuario-handler "gerenciar_usuarios"))
   (context "/api/psicologos" []
-    (GET    "/" request (wrap-checar-permissao listar-psicologos-handler "visualizar_todos_agendamentos"))))
+    (GET    "/" request (wrap-checar-permissao listar-psicologos-handler "visualizar_todos_agendamentos")))
+  ;; --- Adicionando as rotas de pacientes às rotas protegidas ---
+  (context "/api/pacientes" [] pacientes-routes))
 
 (def app
   (-> (defroutes app-routes
