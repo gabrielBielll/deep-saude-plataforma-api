@@ -26,8 +26,6 @@
 
 (defonce datasource (delay (jdbc/get-datasource @db-spec)))
 
-;; --- MUDANÇA COM LOGS DE DEPURAÇÃO AQUI ---
-;; Adiciona logs para sabermos EXATAMENTE qual chave está sendo lida.
 (def jwt-secret
   (if-let [secret (env :jwt-secret)]
     (do
@@ -62,7 +60,7 @@
           (handler request-com-identidade))
         {:status 401 :body {:erro "Token de autorização não fornecido."}})
       (catch Exception e
-        (println "ERRO DE VALIDAÇÃO JWT:" (.getMessage e)) ; Log adicional do erro
+        (println "ERRO DE VALIDAÇÃO JWT:" (.getMessage e))
         {:status 401 :body {:erro "Token inválido ou expirado."}}))))
 
 (defn wrap-checar-permissao [handler nome-permissao-requerida]
@@ -192,21 +190,24 @@
     (let [pacientes (execute-query! ["SELECT * FROM pacientes WHERE clinica_id = ?" clinica-id])]
       {:status 200 :body pacientes})))
 
-;; --- Handlers de Agendamentos ---
+;; --- Handlers de Agendamentos (VERSÃO CORRIGIDA) ---
 (defn criar-agendamento-handler [request]
   (let [clinica-id (get-in request [:identity :clinica_id])
-        {:keys [paciente_id psicologo_id data_hora_inicio data_hora_fim valor_consulta]} (:body request)]
-    (if (or (nil? paciente_id) (nil? psicologo_id) (nil? data_hora_inicio) (nil? data_hora_fim))
-      {:status 400, :body {:erro "paciente_id, psicologo_id, data_hora_inicio e data_hora_fim são obrigatórios."}}
+        ;; --- CORREÇÃO AQUI: Alterado para data_hora_sessao ---
+        {:keys [paciente_id psicologo_id data_hora_sessao valor_consulta]} (:body request)]
+    ;; Validação de dados de entrada
+    (if (or (nil? paciente_id) (nil? psicologo_id) (nil? data_hora_sessao))
+      {:status 400, :body {:erro "paciente_id, psicologo_id e data_hora_sessao são obrigatórios."}}
+      ;; Validação de consistência (Multi-Tenancy)
       (let [paciente-valido? (execute-one! ["SELECT id FROM pacientes WHERE id = ? AND clinica_id = ?" paciente_id clinica-id])
             psicologo-valido? (execute-one! ["SELECT id FROM usuarios WHERE id = ? AND clinica_id = ?" psicologo_id clinica-id])]
         (if (and paciente-valido? psicologo-valido?)
           (let [novo-agendamento (sql/insert! @datasource :agendamentos
+                                              ;; --- CORREÇÃO AQUI: Usando os nomes corretos da tabela ---
                                               {:clinica_id       clinica-id
                                                :paciente_id      paciente_id
                                                :psicologo_id     psicologo_id
-                                               :data_hora_inicio data_hora_inicio
-                                               :data_hora_fim    data_hora_fim
+                                               :data_hora_sessao data_hora_sessao
                                                :valor_consulta   valor_consulta}
                                               {:builder-fn rs/as-unqualified-lower-maps :return-keys true})]
             {:status 201, :body novo-agendamento})
