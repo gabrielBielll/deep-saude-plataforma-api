@@ -1,51 +1,51 @@
-### **Diário de Bordo Técnico – Plataforma Deep Saúde**
+### **Relatório Técnico de Atualização – Conclusão do Backend do MVP**
 
-**Data de Referência:** 06 de Setembro de 2025
-**Status:** Épico 1 (Autenticação e Arquitetura Core) Concluído e Validado em Produção.
+**Versão:** 3.0
+**Data:** 27 de Junho de 2025
+**Status:** Backend do MVP (Épicos 1 e 2) Concluído e Validado.
 
----
+#### **1. Resumo Executivo**
 
-### **1. Resumo Executivo**
+Este documento descreve a conclusão bem-sucedida do desenvolvimento e validação do backend para o Produto Mínimo Viável (MVP) da Plataforma Deep Saúde. O projeto evoluiu de uma fundação com autenticação simulada para uma API RESTful completa, segura e multi-tenant, pronta para ser consumida por uma aplicação frontend. Foram implementados os fluxos de negócio essenciais para provisionamento de clínicas, gestão de usuários, pacientes e agendamentos. A robustez da arquitetura de Controle de Acesso Baseado em Papéis (RBAC) e de isolamento de dados (Multi-Tenancy) foi rigorosamente validada através de um cenário de teste de ponta a ponta em um ambiente de produção no Render.
 
-Esta fase de desenvolvimento representou um marco crítico para a plataforma: a substituição completa do sistema de autenticação simulado (`wrap-mock-autenticacao`) por uma arquitetura de segurança robusta, stateless e pronta para produção, baseada em JSON Web Tokens (JWT). O trabalho foi além da implementação, incluindo o deploy em um ambiente real (Render) e a validação de ponta a ponta dos pilares arquitetônicos do sistema: **Autenticação JWT**, **Controle de Acesso Baseado em Papéis (RBAC)** e **Isolamento de Dados (Multi-Tenancy)**. A fundação do backend está agora validada e pronta para a expansão das funcionalidades de negócio.
+#### **2. Funcionalidades Implementadas**
 
----
+A API agora suporta o ciclo de vida completo das operações de uma clínica, conforme o escopo do MVP.
 
-### **2. Detalhamento da Implementação e Validação**
+* **Módulo de Provisionamento e Autenticação (Épico 1):**
+    * `POST /api/admin/provisionar-clinica`: Endpoint administrativo para o onboarding de uma nova clínica e seu primeiro usuário administrador.
+    * `POST /api/auth/login`: Endpoint público para autenticação de usuários via email e senha. Retorna um JSON Web Token (JWT) stateless com validade de 1 hora.
 
-#### **2.1. Implementação do Sistema de Autenticação JWT**
+* **Módulo de Gestão de Usuários (Épico 1):**
+    * `POST /api/usuarios`: Endpoint protegido que permite a um administrador de clínica criar novos usuários (como `secretario` ou `psicologo`), associando-os à sua própria clínica.
 
-A primeira etapa consistiu em reescrever partes centrais da aplicação para suportar um ciclo de vida de usuário real.
-* **Dependências:** O projeto foi atualizado (`project.clj`) para incluir as bibliotecas `buddy-sign` e `buddy-hashers`, essenciais para a geração de tokens e armazenamento seguro de senhas.
-* **Banco de Dados:** O esquema da tabela `usuarios` foi migrado para incluir a coluna `senha_hash`, garantindo que senhas nunca sejam armazenadas em texto plano.
-* **Novos Endpoints:** Foram criados os endpoints públicos essenciais para o ciclo de vida:
-    * `POST /api/admin/provisionar-clinica`: Permite a criação de um novo *tenant* (clínica) e seu primeiro usuário administrador.
-    * `POST /api/auth/login`: Permite a autenticação de qualquer usuário, retornando um JWT assinado.
-* **Middleware de Segurança:** O `wrap-mock-autenticacao` foi substituído pelo `wrap-jwt-autenticacao`, que agora protege as rotas privadas extraindo, validando e decodificando o token JWT do cabeçalho `Authorization`.
+* **Módulo de Gestão de Pacientes (Épico 2):**
+    * `POST /api/pacientes`: Endpoint protegido para a criação de novos pacientes, garantindo que cada paciente esteja vinculado à `clinica_id` do usuário autenticado.
+    * `GET /api/pacientes`: Endpoint protegido para listar todos os pacientes pertencentes à clínica do usuário autenticado.
 
-#### **2.2. Depuração e Validação em Ambiente Real (Render)**
+* **Módulo de Gestão de Agendamentos (Épico 2):**
+    * `POST /api/agendamentos`: Endpoint protegido para criar agendamentos. A lógica de negócio inclui uma validação crítica para garantir que o paciente e o psicólogo selecionados pertençam à mesma clínica do usuário que realiza a operação.
+    * `GET /api/agendamentos`: Endpoint protegido com lógica de autorização dinâmica:
+        * Usuários com papel de `admin_clinica` ou `secretario` podem visualizar todos os agendamentos da clínica.
+        * Usuários com papel de `psicologo` podem visualizar **apenas** os seus próprios agendamentos, garantindo a privacidade e o escopo correto dos dados.
 
-Após o deploy da nova versão no Render, uma série de testes `curl` revelaram e permitiram a correção de bugs de integração e configuração de dados, um processo vital para garantir a robustez do sistema:
-1.  **Corrigido:** `ERROR: column "nome" does not exist`. Resolvido ajustando o código para usar o nome de coluna correto (`nome_da_clinica`) ao inserir uma nova clínica.
-2.  **Corrigido:** `ERROR: null value in column "papel_id"`. Resolvido populando a tabela `papeis` com os dados necessários (`admin_clinica`, `secretario`, etc.) e ajustando o código para buscar pelo nome de papel correto (`admin_clinica` em vez de `admin`).
-3.  **Corrigido:** `ERROR: Usuário não tem a permissão necessária`. Resolvido populando a tabela `permissoes` e criando a associação correta na tabela de junção `papel_permissoes` para conceder ao papel `admin_clinica` a permissão `gerenciar_usuarios`.
+#### **3. Evolução da Arquitetura e Validações**
 
-#### **2.3. Validação de Ponta a Ponta da Arquitetura**
+* **Autenticação JWT:** O middleware `wrap-mock-autenticacao` foi substituído por um sistema robusto (`wrap-jwt-autenticacao`) utilizando a biblioteca `buddy`. As senhas são armazenadas de forma segura no banco de dados usando hashes criptográficos (`buddy.hashers`).
 
-Com os bugs de integração resolvidos, um cenário de teste completo foi executado com sucesso, validando os três pilares da arquitetura:
-* **Autenticação Validada:** O fluxo de `provisionar -> login -> obter token` foi executado com sucesso.
-* **RBAC Validado:** Foi provado que um usuário com o papel de `secretario` **podia** listar psicólogos (acesso permitido) mas era corretamente **bloqueado** com um erro `403 Forbidden` ao tentar criar um novo usuário (acesso negado).
-* **Multi-Tenancy Validado:** O teste crítico foi bem-sucedido. Foi criada uma segunda clínica com seu próprio psicólogo. Ao fazer login com um usuário da primeira clínica, a API retornou **apenas** os dados pertencentes à primeira clínica, provando que o isolamento de dados via `clinica_id` (injetado pelo JWT) está funcionando perfeitamente.
+* **Configuração de Ambiente de Produção:** O problema de validação de tokens no ambiente de produção foi resolvido através da configuração explícita da variável de ambiente `JWT_SECRET` no Render. O código foi aprimorado para "falhar ruidosamente" (fail-fast), lançando uma exceção se a variável não estiver presente na inicialização, garantindo a robustez da configuração.
 
----
+* **Validação do RBAC:** Foi provado que o sistema de permissões é funcional. Um cenário de teste confirmou que um `admin` pode criar usuários (`gerenciar_usuarios`), mas um `secretario` não pode, resultando no erro esperado `403 Forbidden`.
 
-### **3. Próximos Passos Críticos**
+* **Validação da Multi-Tenancy:** O teste de isolamento de dados foi executado com sucesso. Foi criada uma segunda clínica com seus próprios usuários. As requisições feitas com um token de um usuário da "Clínica A" retornaram **apenas** os dados pertencentes à "Clínica A", provando que o filtro por `clinica_id` em todas as consultas SQL é eficaz.
 
-Com a fundação da plataforma estável e segura, o projeto está pronto para avançar para a implementação das funcionalidades de negócio, conforme o plano original.
+#### **4. Status Atual do Projeto**
 
-* **Épico 2: Expandir a API Core**
-    * **Prioridade 1: Módulo de Gestão de Pacientes.** Desenvolver os endpoints CRUD (`GET`, `POST`, `PUT`, `DELETE`) para `/api/pacientes`. A lógica seguirá o padrão de multi-tenancy já validado.
-    * **Prioridade 2: Módulo de Gestão de Agendamentos.** Implementar a funcionalidade central da plataforma em `/api/agendamentos`, incluindo validações de negócio e lógica de permissão granular.
+O backend do MVP está **100% concluído e funcional**. Todos os épicos de backend definidos no plano de desenvolvimento inicial foram implementados, testados e validados. A API está estável e pronta para a próxima fase.
 
-* **Épico 3: Iniciar a Construção do Frontend (SPA)**
-    * O trabalho na interface de usuário pode começar em paralelo. A primeira tarefa será construir a tela de login que consome o endpoint `/api/auth/login` e implementar o gerenciamento do JWT no cliente.
+#### **5. Próximos Passos**
+
+O projeto agora entra na fase de desenvolvimento da interface do usuário.
+
+* **Épico 3: Desenvolvimento da Interface Frontend (SPA):** A equipe de frontend pode iniciar o trabalho, consumindo a API já validada. As primeiras tarefas incluem a criação da tela de login e o gerenciamento do ciclo de vida do JWT no cliente.
+* **Futuro (Pós-MVP):** Após a conclusão do frontend do MVP, podemos planejar um novo épico para "Melhorias de Autenticação", cuja tarefa principal será a implementação do login social com **Google Auth**.
