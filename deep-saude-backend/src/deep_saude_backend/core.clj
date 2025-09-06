@@ -26,12 +26,16 @@
 
 (defonce datasource (delay (jdbc/get-datasource @db-spec)))
 
-;; --- MUDANÇA IMPORTANTE AQUI ---
-;; Força a leitura da variável de ambiente. Se não existir, a aplicação falhará no deploy.
+;; --- MUDANÇA COM LOGS AQUI ---
+;; Adiciona logs para sabermos exatamente o que acontece ao ler a variável de ambiente.
 (def jwt-secret
   (if-let [secret (env :jwt-secret)]
-    secret
-    (throw (Exception. "FATAL: A variável de ambiente :jwt-secret não está configurada!"))))
+    (do
+      (println "SUCCESS: Variável de ambiente JWT_SECRET encontrada e carregada.")
+      secret)
+    (do
+      (println "ERROR: Variável de ambiente JWT_SECRET não foi encontrada!")
+      (throw (Exception. "FATAL: A variável de ambiente :jwt-secret não está configurada! A aplicação será encerrada.")))))
 
 (defn execute-query! [query-vector]
   (jdbc/execute! @datasource query-vector {:builder-fn rs/as-unqualified-lower-maps}))
@@ -274,5 +278,4 @@
   (init-db)
   (let [port (Integer. (or (env :port) 3000))]
     (println (str "Servidor iniciado na porta " port))
-    ;; Esta linha de log foi removida, pois a nova definição do jwt-secret já garante a falha
     (jetty/run-jetty #'app {:port port :join? false})))
