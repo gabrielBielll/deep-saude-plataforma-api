@@ -8,7 +8,7 @@
             [next.jdbc.sql :as sql]
             [next.jdbc.result-set :as rs]
             [clojure.string :as str]
-            ;; --- NOVAS DEPENDÊNCIAS PARA AUTENTICAÇÃO ---
+            ;; --- DEPENDÊNCIAS PARA AUTENTICAÇÃO ---
             [buddy.sign.jwt :as jwt]
             [buddy.hashers :as hashers])
   (:gen-class))
@@ -87,8 +87,10 @@
       {:status 409, :body {:erro "Email do administrador já cadastrado no sistema."}}
 
       :else
-      (let [nova-clinica (sql/insert! @datasource :clinicas {:nome nome_clinica :limite_psicologos limite_psicologos}
-                                      {:builder-fn rs/as-unqualified-lower-maps :return-keys [:id :nome]})
+      (let [;; --- CORREÇÃO FINAL APLICADA AQUI ---
+            nova-clinica (sql/insert! @datasource :clinicas
+                                      {:nome_da_clinica nome_clinica :limite_psicologos limite_psicologos}
+                                      {:builder-fn rs/as-unqualified-lower-maps :return-keys [:id :nome_da_clinica]})
             papel-admin-id (:id (execute-one! ["SELECT id FROM papeis WHERE nome_papel = 'admin'"]))
             novo-admin (sql/insert! @datasource :usuarios
                                     {:clinica_id (:id nova-clinica)
@@ -145,7 +147,6 @@
           {:status 201, :body novo-usuario})
         {:status 400, :body {:erro (str "O papel '" papel "' não é válido.")}}))))
 
-
 (defn listar-psicologos-handler [request]
   (let [clinica-id (get-in request [:identity :clinica_id])]
     (if-not clinica-id
@@ -158,8 +159,8 @@
                              clinica-id papel-psicologo-id])]
             {:status 200 :body psicologos}))))))
 
-;; Demais handlers (atualizar, remover psicólogo, etc.) permanecem os mesmos...
-;; (Para brevidade, eles não foram repetidos aqui, mas devem ser mantidos no seu arquivo)
+;; Nota: Os handlers para ATUALIZAR e REMOVER psicólogos ainda precisam ser adicionados/adaptados
+;; conforme expandimos a API. Por enquanto, focamos na autenticação e criação.
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -174,11 +175,8 @@
 (defroutes protected-routes
   (POST   "/api/usuarios" request (wrap-checar-permissao criar-usuario-handler "gerenciar_usuarios"))
   (context "/api/psicologos" []
-    ; (POST   "/" request (wrap-checar-permissao criar-psicologo-handler "gerenciar_psicologos")) ; Substituído por /api/usuarios
-    (GET    "/" request (wrap-checar-permissao listar-psicologos-handler "visualizar_todos_agendamentos"))
-    ; (PUT    "/:id" [id] (wrap-checar-permissao (fn [request] (atualizar-psicologo-handler (assoc request :params {:id id}))) "gerenciar_psicologos"))
-    ; (DELETE "/:id" [id] (wrap-checar-permissao (fn [request] (remover-psicologo-handler (assoc request :params {:id id}))) "gerenciar_psicologos"))
-    ))
+    (GET    "/" request (wrap-checar-permissao listar-psicologos-handler "visualizar_todos_agendamentos"))))
+    ; Adicionar rotas PUT e DELETE para psicólogos aqui quando necessário
 
 (def app
   (-> (defroutes app-routes
