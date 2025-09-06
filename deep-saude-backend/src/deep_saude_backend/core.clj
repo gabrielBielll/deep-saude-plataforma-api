@@ -26,12 +26,12 @@
 
 (defonce datasource (delay (jdbc/get-datasource @db-spec)))
 
-;; --- MUDANÇA COM LOGS AQUI ---
-;; Adiciona logs para sabermos exatamente o que acontece ao ler a variável de ambiente.
+;; --- MUDANÇA COM LOGS DE DEPURAÇÃO AQUI ---
+;; Adiciona logs para sabermos EXATAMENTE qual chave está sendo lida.
 (def jwt-secret
   (if-let [secret (env :jwt-secret)]
     (do
-      (println "SUCCESS: Variável de ambiente JWT_SECRET encontrada e carregada.")
+      (println (str "SUCCESS: JWT_SECRET encontrada. Início: '" (subs secret 0 (min 4 (count secret))) "...', Fim: '..." (subs secret (max 0 (- (count secret) 4))) "'."))
       secret)
     (do
       (println "ERROR: Variável de ambiente JWT_SECRET não foi encontrada!")
@@ -61,7 +61,8 @@
               request-com-identidade (assoc request :identity claims)]
           (handler request-com-identidade))
         {:status 401 :body {:erro "Token de autorização não fornecido."}})
-      (catch Exception _
+      (catch Exception e
+        (println "ERRO DE VALIDAÇÃO JWT:" (.getMessage e)) ; Log adicional do erro
         {:status 401 :body {:erro "Token inválido ou expirado."}}))))
 
 (defn wrap-checar-permissao [handler nome-permissao-requerida]
