@@ -27,7 +27,6 @@
 
 (defonce datasource (delay (jdbc/get-datasource @db-spec)))
 
-;; A chave secreta para assinar os tokens JWT. DEVE ser configurada como variável de ambiente em produção.
 (defonce jwt-secret (or (env :jwt-secret) "secret-padrao-para-desenvolvimento"))
 
 (defn execute-query! [query-vector]
@@ -50,7 +49,7 @@
   (fn [request]
     (try
       (if-let [token (extract-token request)]
-        (let [claims (jwt/unsign token jwt-secret) ; Valida assinatura e expiração
+        (let [claims (jwt/unsign token jwt-secret)
               request-com-identidade (assoc request :identity claims)]
           (handler request-com-identidade))
         {:status 401 :body {:erro "Token de autorização não fornecido."}})
@@ -87,21 +86,27 @@
       {:status 409, :body {:erro "Email do administrador já cadastrado no sistema."}}
 
       :else
-      (let [;; --- CORREÇÃO FINAL APLICADA AQUI ---
-            nova-clinica (sql/insert! @datasource :clinicas
+      (let [nova-clinica (sql/insert! @datasource :clinicas
                                       {:nome_da_clinica nome_clinica :limite_psicologos limite_psicologos}
                                       {:builder-fn rs/as-unqualified-lower-maps :return-keys [:id :nome_da_clinica]})
-            papel-admin-id (:id (execute-one! ["SELECT id FROM papeis WHERE nome_papel = 'admin'"]))
-            novo-admin (sql/insert! @datasource :usuarios
-                                    {:clinica_id (:id nova-clinica)
-                                     :papel_id   papel-admin-id
-                                     :nome       nome_admin
-                                     :email      email_admin
-                                     :senha_hash (hashers/encrypt senha_admin)}
-                                    {:builder-fn rs/as-unqualified-lower-maps :return-keys [:id :email]})]
-        {:status 201 :body {:message         "Clínica e usuário administrador criados com sucesso."
-                             :clinica         nova-clinica
-                             :usuario_admin   novo-admin}}))))
+            
+            ;; --- CORREÇÃO FINALÍSSIMA AQUI ---
+            ;; Alterado de 'admin' para 'admin_clinica' para corresponder ao banco de dados.
+            papel-admin-id (:id (execute-one! ["SELECT id FROM papeis WHERE nome_papel = 'admin_clinica'"]))
+
+            novo-admin (when papel-admin-id
+                         (sql/insert! @datasource :usuarios
+                                      {:clinica_id (:id nova-clinica)
+                                       :papel_id   papel-admin-id
+                                       :nome       nome_admin
+                                       :email      email_admin
+                                       :senha_hash (hashers/encrypt senha_admin)}
+                                      {:builder-fn rs/as-unqualified-lower-maps :return-keys [:id :email]}))]
+        (if novo-admin
+          {:status 201 :body {:message         "Clínica e usuário administrador criados com sucesso."
+                               :clinica         nova-clinica
+                               :usuario_admin   novo-admin}}
+          {:status 500 :body {:erro "Erro interno: O papel 'admin_clinica' não foi encontrado ou não pôde ser associado."}})))))
 
 (defn login-handler [request]
   (let [{:keys [email senha]} (:body request)]
@@ -159,10 +164,6 @@
                              clinica-id papel-psicologo-id])]
             {:status 200 :body psicologos}))))))
 
-;; Nota: Os handlers para ATUALIZAR e REMOVER psicólogos ainda precisam ser adicionados/adaptados
-;; conforme expandimos a API. Por enquanto, focamos na autenticação e criação.
-
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Definição das Rotas e Aplicação Principal
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -176,12 +177,11 @@
   (POST   "/api/usuarios" request (wrap-checar-permissao criar-usuario-handler "gerenciar_usuarios"))
   (context "/api/psicologos" []
     (GET    "/" request (wrap-checar-permissao listar-psicologos-handler "visualizar_todos_agendamentos"))))
-    ; Adicionar rotas PUT e DELETE para psicólogos aqui quando necessário
 
 (def app
   (-> (defroutes app-routes
         public-routes
-        (wrap-jwt-autenticacao protected-routes) ; Aplica o middleware JWT apenas nas rotas protegidas
+        (wrap-jwt-autenticacao protected-routes)
         (route/not-found "Recurso não encontrado"))
       (middleware-json/wrap-json-body {:keywords? true})
       (middleware-json/wrap-json-response)))
