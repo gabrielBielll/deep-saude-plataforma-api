@@ -26,7 +26,12 @@
 
 (defonce datasource (delay (jdbc/get-datasource @db-spec)))
 
-(defonce jwt-secret (or (env :jwt-secret) "secret-padrao-para-desenvolvimento"))
+;; --- MUDANÇA IMPORTANTE AQUI ---
+;; Força a leitura da variável de ambiente. Se não existir, a aplicação falhará no deploy.
+(def jwt-secret
+  (if-let [secret (env :jwt-secret)]
+    secret
+    (throw (Exception. "FATAL: A variável de ambiente :jwt-secret não está configurada!"))))
 
 (defn execute-query! [query-vector]
   (jdbc/execute! @datasource query-vector {:builder-fn rs/as-unqualified-lower-maps}))
@@ -182,14 +187,12 @@
     (let [pacientes (execute-query! ["SELECT * FROM pacientes WHERE clinica_id = ?" clinica-id])]
       {:status 200 :body pacientes})))
 
-;; --- Handlers de Agendamentos (NOVA SEÇÃO) ---
+;; --- Handlers de Agendamentos ---
 (defn criar-agendamento-handler [request]
   (let [clinica-id (get-in request [:identity :clinica_id])
         {:keys [paciente_id psicologo_id data_hora_inicio data_hora_fim valor_consulta]} (:body request)]
-    ;; Validação de dados de entrada
     (if (or (nil? paciente_id) (nil? psicologo_id) (nil? data_hora_inicio) (nil? data_hora_fim))
       {:status 400, :body {:erro "paciente_id, psicologo_id, data_hora_inicio e data_hora_fim são obrigatórios."}}
-      ;; Validação de consistência (Multi-Tenancy)
       (let [paciente-valido? (execute-one! ["SELECT id FROM pacientes WHERE id = ? AND clinica_id = ?" paciente_id clinica-id])
             psicologo-valido? (execute-one! ["SELECT id FROM usuarios WHERE id = ? AND clinica_id = ?" psicologo_id clinica-id])]
         (if (and paciente-valido? psicologo-valido?)
@@ -211,9 +214,7 @@
         user-id (:user_id identity)
         nome-papel (:nome_papel (execute-one! ["SELECT nome_papel FROM papeis WHERE id = ?" papel-id]))]
     (let [agendamentos (if (or (= nome-papel "admin_clinica") (= nome-papel "secretario"))
-                         ;; Admins e Secretários veem tudo da clínica
                          (execute-query! ["SELECT * FROM agendamentos WHERE clinica_id = ?" clinica-id])
-                         ;; Psicólogos veem apenas os seus
                          (execute-query! ["SELECT * FROM agendamentos WHERE clinica_id = ? AND psicologo_id = ?" clinica-id user-id]))]
       {:status 200 :body agendamentos})))
 
@@ -230,17 +231,15 @@
   (POST "/" request (wrap-checar-permissao criar-paciente-handler "gerenciar_pacientes"))
   (GET  "/" request (wrap-checar-permissao listar-pacientes-handler "visualizar_pacientes")))
 
-;; --- Rotas de Agendamentos (NOVA SEÇÃO) ---
 (defroutes agendamentos-routes
   (POST "/" request (wrap-checar-permissao criar-agendamento-handler "gerenciar_agendamentos_clinica"))
-  (GET  "/" request (wrap-jwt-autenticacao listar-agendamentos-handler))) ; Permissão é checada dentro do handler
+  (GET  "/" request (wrap-jwt-autenticacao listar-agendamentos-handler)))
 
 (defroutes protected-routes
   (POST   "/api/usuarios" request (wrap-checar-permissao criar-usuario-handler "gerenciar_usuarios"))
   (context "/api/psicologos" []
     (GET    "/" request (wrap-checar-permissao listar-psicologos-handler "visualizar_todos_agendamentos")))
   (context "/api/pacientes" [] pacientes-routes)
-  ;; --- Adicionando as rotas de agendamentos ---
   (context "/api/agendamentos" [] agendamentos-routes))
 
 (def app
@@ -275,5 +274,5 @@
   (init-db)
   (let [port (Integer. (or (env :port) 3000))]
     (println (str "Servidor iniciado na porta " port))
-    (println (str "Usando JWT_SECRET: " (subs jwt-secret 0 (min 4 (count jwt-secret))) "..."))
+    ;; Esta linha de log foi removida, pois a nova definição do jwt-secret já garante a falha
     (jetty/run-jetty #'app {:port port :join? false})))
