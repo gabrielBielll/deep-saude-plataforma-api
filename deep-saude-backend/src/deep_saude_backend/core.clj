@@ -152,6 +152,14 @@
           {:status 201, :body novo-usuario})
         {:status 400, :body {:erro (str "O papel '" papel "' não é válido.")}}))))
 
+(defn remover-usuario-handler [request]
+  (let [clinica-id-admin (get-in request [:identity :clinica_id])
+        usuario-id-para-remover (get-in request [:params :id])]
+    (let [resultado (sql/delete! @datasource :usuarios {:id usuario-id-para-remover :clinica_id clinica-id-admin})]
+      (if (zero? (:next.jdbc/update-count resultado))
+        {:status 404 :body {:erro "Usuário não encontrado nesta clínica ou você não tem permissão para removê-lo."}}
+        {:status 204 :body ""}))))
+
 ;; --- Handlers de Psicólogos ---
 (defn listar-psicologos-handler [request]
   (let [clinica-id (get-in request [:identity :clinica_id])]
@@ -190,20 +198,16 @@
     (let [pacientes (execute-query! ["SELECT * FROM pacientes WHERE clinica_id = ?" clinica-id])]
       {:status 200 :body pacientes})))
 
-;; --- Handlers de Agendamentos (VERSÃO CORRIGIDA) ---
+;; --- Handlers de Agendamentos ---
 (defn criar-agendamento-handler [request]
   (let [clinica-id (get-in request [:identity :clinica_id])
-        ;; --- CORREÇÃO AQUI: Alterado para data_hora_sessao ---
         {:keys [paciente_id psicologo_id data_hora_sessao valor_consulta]} (:body request)]
-    ;; Validação de dados de entrada
     (if (or (nil? paciente_id) (nil? psicologo_id) (nil? data_hora_sessao))
       {:status 400, :body {:erro "paciente_id, psicologo_id e data_hora_sessao são obrigatórios."}}
-      ;; Validação de consistência (Multi-Tenancy)
       (let [paciente-valido? (execute-one! ["SELECT id FROM pacientes WHERE id = ? AND clinica_id = ?" paciente_id clinica-id])
             psicologo-valido? (execute-one! ["SELECT id FROM usuarios WHERE id = ? AND clinica_id = ?" psicologo_id clinica-id])]
         (if (and paciente-valido? psicologo-valido?)
           (let [novo-agendamento (sql/insert! @datasource :agendamentos
-                                              ;; --- CORREÇÃO AQUI: Usando os nomes corretos da tabela ---
                                               {:clinica_id       clinica-id
                                                :paciente_id      paciente_id
                                                :psicologo_id     psicologo_id
@@ -224,6 +228,7 @@
                          (execute-query! ["SELECT * FROM agendamentos WHERE clinica_id = ? AND psicologo_id = ?" clinica-id user-id]))]
       {:status 200 :body agendamentos})))
 
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Definição das Rotas e Aplicação Principal
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -243,9 +248,13 @@
 
 (defroutes protected-routes
   (POST   "/api/usuarios" request (wrap-checar-permissao criar-usuario-handler "gerenciar_usuarios"))
+  (DELETE "/api/usuarios/:id" request (wrap-checar-permissao remover-usuario-handler "gerenciar_usuarios"))
+  
   (context "/api/psicologos" []
     (GET    "/" request (wrap-checar-permissao listar-psicologos-handler "visualizar_todos_agendamentos")))
+    
   (context "/api/pacientes" [] pacientes-routes)
+  
   (context "/api/agendamentos" [] agendamentos-routes))
 
 (def app
@@ -260,7 +269,6 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Funções de Inicialização
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
 (defn init-db []
   (if (env :database-url)
     (do
