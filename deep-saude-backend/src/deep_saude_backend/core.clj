@@ -10,7 +10,6 @@
             [clojure.string :as str]
             [buddy.sign.jwt :as jwt]
             [buddy.hashers :as hashers]
-            ;; Importação do middleware de CORS
             [ring.middleware.cors :refer [wrap-cors]])
   (:gen-class))
 
@@ -162,6 +161,34 @@
         {:status 404 :body {:erro "Usuário não encontrado nesta clínica ou você não tem permissão para removê-lo."}}
         {:status 204 :body ""}))))
 
+(defn obter-usuario-handler [request]
+  (let [clinica-id (get-in request [:identity :clinica_id])
+        usuario-id (get-in request [:params :id])]
+    (if-let [usuario (execute-one! ["SELECT id, nome, email, papel_id FROM usuarios WHERE id = ? AND clinica_id = ?" usuario-id clinica-id])]
+      {:status 200 :body usuario}
+      {:status 404 :body {:erro "Usuário não encontrado nesta clínica."}})))
+
+(defn atualizar-usuario-handler [request]
+  (let [clinica-id (get-in request [:identity :clinica_id])
+        usuario-id (get-in request [:params :id])
+        {:keys [nome email]} (:body request)]
+    (cond
+      (and (str/blank? nome) (str/blank? email))
+      {:status 400 :body {:erro "Pelo menos um campo (nome ou email) deve ser fornecido para atualização."}}
+
+      (and email (execute-one! ["SELECT id FROM usuarios WHERE email = ? AND id != ?" email usuario-id]))
+      {:status 409 :body {:erro "O email fornecido já está em uso por outro usuário."}}
+
+      :else
+      (let [update-map (cond-> {}
+                         (not (str/blank? nome)) (assoc :nome nome)
+                         (not (str/blank? email)) (assoc :email email))
+            resultado (sql/update! @datasource :usuarios update-map {:id usuario-id :clinica_id clinica-id})]
+        (if (zero? (:next.jdbc/update-count resultado))
+          {:status 404 :body {:erro "Usuário não encontrado nesta clínica ou nenhum dado foi alterado."}}
+          (let [usuario-atualizado (execute-one! ["SELECT id, nome, email, papel_id FROM usuarios WHERE id = ?" usuario-id])]
+            {:status 200 :body usuario-atualizado}))))))
+
 ;; --- Handlers de Psicólogos ---
 (defn listar-psicologos-handler [request]
   (let [clinica-id (get-in request [:identity :clinica_id])]
@@ -234,7 +261,6 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Definição das Rotas e Aplicação Principal
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
 (defroutes public-routes
   (POST "/api/admin/provisionar-clinica" [] provisionar-clinica-handler)
   (POST "/api/auth/login" [] login-handler)
@@ -250,6 +276,8 @@
 
 (defroutes protected-routes
   (POST   "/api/usuarios" request (wrap-checar-permissao criar-usuario-handler "gerenciar_usuarios"))
+  (GET    "/api/usuarios/:id" request (wrap-checar-permissao obter-usuario-handler "gerenciar_usuarios"))
+  (PUT    "/api/usuarios/:id" request (wrap-checar-permissao atualizar-usuario-handler "gerenciar_usuarios"))
   (DELETE "/api/usuarios/:id" request (wrap-checar-permissao remover-usuario-handler "gerenciar_usuarios"))
 
   (context "/api/psicologos" []
