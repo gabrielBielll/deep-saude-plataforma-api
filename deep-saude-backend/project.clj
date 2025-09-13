@@ -7,6 +7,7 @@
                  [ring/ring-core "1.11.0"]
                  [ring/ring-jetty-adapter "1.11.0"] ; Ou http-kit
                  [ring/ring-json "0.5.1"]
+                 [ring-cors "0.1.13"]
                  [compojure "1.7.1"]
                  [com.github.seancorfield/next.jdbc "1.3.909"] ; Nome corrigido
                  [org.postgresql/postgresql "42.7.1"] ; Driver JDBC
