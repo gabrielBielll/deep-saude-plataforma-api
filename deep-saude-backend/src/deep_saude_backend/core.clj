@@ -10,6 +10,7 @@
             [clojure.string :as str]
             [buddy.sign.jwt :as jwt]
             [buddy.hashers :as hashers]
+            ;; Importação do middleware de CORS
             [ring.middleware.cors :refer [wrap-cors]])
   (:gen-class))
 
@@ -250,12 +251,12 @@
 (defroutes protected-routes
   (POST   "/api/usuarios" request (wrap-checar-permissao criar-usuario-handler "gerenciar_usuarios"))
   (DELETE "/api/usuarios/:id" request (wrap-checar-permissao remover-usuario-handler "gerenciar_usuarios"))
-  
+
   (context "/api/psicologos" []
     (GET    "/" request (wrap-checar-permissao listar-psicologos-handler "visualizar_todos_agendamentos")))
-    
+
   (context "/api/pacientes" [] pacientes-routes)
-  
+
   (context "/api/agendamentos" [] agendamentos-routes))
 
 (def app
@@ -263,9 +264,10 @@
         public-routes
         (wrap-jwt-autenticacao protected-routes)
         (route/not-found "Recurso não encontrado"))
-      ;; --- ENVOLVER COM O WRAP-CORS ---
-      (wrap-cors :access-control-allow-origin [#".*"] ; Permite qualquer origem, bom para dev
-                 :access-control-allow-methods [:get :post :put :delete])
+      ;; APLICAÇÃO DO MIDDLEWARE DE CORS
+      (wrap-cors :access-control-allow-origin [#"http://localhost:3000" #"https://deep-ngrv.onrender.com"] ; Adicione a URL do seu frontend aqui
+                 :access-control-allow-methods [:get :post :put :delete :options]
+                 :access-control-allow-headers #{"Authorization" "Content-Type"})
       (middleware-json/wrap-json-body {:keywords? true})
       (middleware-json/wrap-json-response)))
 
