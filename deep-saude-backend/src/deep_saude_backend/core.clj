@@ -9,7 +9,8 @@
             [next.jdbc.result-set :as rs]
             [clojure.string :as str]
             [buddy.sign.jwt :as jwt]
-            [buddy.hashers :as hashers])
+            [buddy.hashers :as hashers]
+            [ring.middleware.cors :refer [wrap-cors]])
   (:gen-class))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -262,6 +263,9 @@
         public-routes
         (wrap-jwt-autenticacao protected-routes)
         (route/not-found "Recurso não encontrado"))
+      ;; --- ENVOLVER COM O WRAP-CORS ---
+      (wrap-cors :access-control-allow-origin [#".*"] ; Permite qualquer origem, bom para dev
+                 :access-control-allow-methods [:get :post :put :delete])
       (middleware-json/wrap-json-body {:keywords? true})
       (middleware-json/wrap-json-response)))
 
