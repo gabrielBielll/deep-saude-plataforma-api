@@ -11,7 +11,8 @@
             [buddy.sign.jwt :as jwt]
             [buddy.hashers :as hashers]
             [ring.middleware.cors :refer [wrap-cors]])
-  (:gen-class))
+  (:gen-class)
+  (:import (java.sql Date))) ; Importar java.sql.Date para conversão
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Configuração do Banco de Dados e JWT
@@ -198,14 +199,14 @@
         (if-not papel-psicologo-id
           {:status 500 :body {:erro "Configuração de papel 'psicologo' não encontrada."}}
           (let [psicologos (execute-query!
-                            ["SELECT id, nome, email, clinica_id, papel_id FROM usuarios WHERE clinica_id = ? AND papel_id = ?"
-                             clinica-id papel-psicologo-id])]
+                             ["SELECT id, nome, email, clinica_id, papel_id FROM usuarios WHERE clinica_id = ? AND papel_id = ?"
+                              clinica-id papel-psicologo-id])]
             {:status 200 :body psicologos}))))))
 
 ;; --- Handlers de Pacientes ---
 (defn criar-paciente-handler [request]
   (let [clinica-id (get-in request [:identity :clinica_id])
-        {:keys [nome email telefone]} (:body request)]
+        {:keys [nome email telefone data_nascimento endereco avatar_url]} (:body request)]
     (cond
       (str/blank? nome)
       {:status 400, :body {:erro "Nome do paciente é obrigatório."}}
@@ -215,17 +216,34 @@
 
       :else
       (let [novo-paciente (sql/insert! @datasource :pacientes
-                                       {:clinica_id clinica-id
-                                        :nome       nome
-                                        :email      email
-                                        :telefone   telefone}
+                                       {:clinica_id      clinica-id
+                                        :nome            nome
+                                        :email           email
+                                        :telefone        telefone
+                                        :data_nascimento (when data_nascimento (Date/valueOf data_nascimento))
+                                        :endereco        endereco
+                                        :avatar_url      avatar_url}
                                        {:builder-fn rs/as-unqualified-lower-maps :return-keys true})]
         {:status 201, :body novo-paciente}))))
 
 (defn listar-pacientes-handler [request]
   (let [clinica-id (get-in request [:identity :clinica_id])]
-    (let [pacientes (execute-query! ["SELECT * FROM pacientes WHERE clinica_id = ?" clinica-id])]
+    (let [pacientes (execute-query! ["SELECT id, nome, email, telefone, data_nascimento, endereco, avatar_url, data_cadastro FROM pacientes WHERE clinica_id = ?" clinica-id])]
       {:status 200 :body pacientes})))
+
+;; ESBOÇO DOS PRÓXIMOS HANDLERS DE PACIENTES
+(defn obter-paciente-handler [request]
+  ;; TODO: Implementar lógica para buscar um paciente por ID
+  {:status 501, :body {:erro "Endpoint ainda não implementado."}})
+
+(defn atualizar-paciente-handler [request]
+  ;; TODO: Implementar lógica para atualizar um paciente por ID
+  {:status 501, :body {:erro "Endpoint ainda não implementado."}})
+
+(defn remover-paciente-handler [request]
+  ;; TODO: Implementar lógica para remover um paciente por ID
+  {:status 501, :body {:erro "Endpoint ainda não implementado."}})
+
 
 ;; --- Handlers de Agendamentos ---
 (defn criar-agendamento-handler [request]
@@ -266,9 +284,13 @@
   (POST "/api/auth/login" [] login-handler)
   (GET  "/api/health" [] health-check-handler))
 
+;; ROTAS ATUALIZADAS PARA PACIENTES
 (defroutes pacientes-routes
-  (POST "/" request (wrap-checar-permissao criar-paciente-handler "gerenciar_pacientes"))
-  (GET  "/" request (wrap-checar-permissao listar-pacientes-handler "visualizar_pacientes")))
+  (POST   "/" request (wrap-checar-permissao criar-paciente-handler "gerenciar_pacientes"))
+  (GET    "/" request (wrap-checar-permissao listar-pacientes-handler "visualizar_pacientes"))
+  (GET    "/:id" request (wrap-checar-permissao obter-paciente-handler "visualizar_pacientes"))
+  (PUT    "/:id" request (wrap-checar-permissao atualizar-paciente-handler "gerenciar_pacientes"))
+  (DELETE "/:id" request (wrap-checar-permissao remover-paciente-handler "gerenciar_pacientes")))
 
 (defroutes agendamentos-routes
   (POST "/" request (wrap-checar-permissao criar-agendamento-handler "gerenciar_agendamentos_clinica"))
@@ -293,7 +315,7 @@
         (wrap-jwt-autenticacao protected-routes)
         (route/not-found "Recurso não encontrado"))
       ;; APLICAÇÃO DO MIDDLEWARE DE CORS
-      (wrap-cors :access-control-allow-origin [#"http://localhost:3000" #"https://deep-ngrv.onrender.com"] ; Adicione a URL do seu frontend aqui
+      (wrap-cors :access-control-allow-origin [#"http://localhost:3000" #"http://localhost:9002" #"https://deep-ngrv.onrender.com"] ; Adicionada porta 9002
                  :access-control-allow-methods [:get :post :put :delete :options]
                  :access-control-allow-headers #{"Authorization" "Content-Type"})
       (middleware-json/wrap-json-body {:keywords? true})
