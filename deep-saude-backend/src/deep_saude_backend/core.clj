@@ -233,12 +233,36 @@
 
 ;; ESBOÇO DOS PRÓXIMOS HANDLERS DE PACIENTES
 (defn obter-paciente-handler [request]
-  ;; TODO: Implementar lógica para buscar um paciente por ID
-  {:status 501, :body {:erro "Endpoint ainda não implementado."}})
+  (let [clinica-id (get-in request [:identity :clinica_id])
+        paciente-id (get-in request [:params :id])]
+    (if-let [paciente (execute-one! ["SELECT * FROM pacientes WHERE id = ? AND clinica_id = ?" paciente-id clinica-id])]
+      {:status 200 :body paciente}
+      {:status 404 :body {:erro "Paciente não encontrado nesta clínica."}})))
 
 (defn atualizar-paciente-handler [request]
-  ;; TODO: Implementar lógica para atualizar um paciente por ID
-  {:status 501, :body {:erro "Endpoint ainda não implementado."}})
+  (let [clinica-id (get-in request [:identity :clinica_id])
+        paciente-id (get-in request [:params :id])
+        {:keys [nome email telefone data_nascimento endereco avatar_url]} (:body request)]
+    (cond
+      (str/blank? nome)
+      {:status 400 :body {:erro "O campo nome não pode estar em branco."}}
+
+      (and email (not (str/blank? email)) 
+           (execute-one! ["SELECT id FROM pacientes WHERE email = ? AND clinica_id = ? AND id != ?" email clinica-id paciente-id]))
+      {:status 409 :body {:erro "O email fornecido já está em uso por outro paciente nesta clínica."}}
+
+      :else
+      (let [update-map {:nome nome
+                        :email email
+                        :telefone telefone
+                        :data_nascimento (when data_nascimento (Date/valueOf data_nascimento))
+                        :endereco endereco
+                        :avatar_url avatar_url}
+            resultado (sql/update! @datasource :pacientes update-map {:id paciente-id :clinica_id clinica-id})]
+        (if (zero? (:next.jdbc/update-count resultado))
+          {:status 404 :body {:erro "Paciente não encontrado nesta clínica ou nenhum dado foi alterado."}}
+          (let [paciente-atualizado (execute-one! ["SELECT * FROM pacientes WHERE id = ?" paciente-id])]
+            {:status 200 :body paciente-atualizado}))))))
 
 (defn remover-paciente-handler [request]
   (let [clinica-id (get-in request [:identity :clinica_id])
