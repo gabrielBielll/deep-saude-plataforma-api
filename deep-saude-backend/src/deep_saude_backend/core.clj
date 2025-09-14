@@ -241,8 +241,12 @@
   {:status 501, :body {:erro "Endpoint ainda não implementado."}})
 
 (defn remover-paciente-handler [request]
-  ;; TODO: Implementar lógica para remover um paciente por ID
-  {:status 501, :body {:erro "Endpoint ainda não implementado."}})
+  (let [clinica-id (get-in request [:identity :clinica_id])
+        paciente-id-para-remover (get-in request [:params :id])]
+    (let [resultado (sql/delete! @datasource :pacientes {:id paciente-id-para-remover :clinica_id clinica-id})]
+      (if (zero? (:next.jdbc/update-count resultado))
+        {:status 404 :body {:erro "Paciente não encontrado nesta clínica ou você não tem permissão para removê-lo."}}
+        {:status 204 :body ""}))))
 
 
 ;; --- Handlers de Agendamentos ---
